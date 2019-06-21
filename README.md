@@ -31,7 +31,7 @@ Regular expressions as well as the background color should
 be customized according to personal requirements.
 
 ## Popup Menus/Keyboard shortcuts:
-- "Toggle xray" (Shortcut: 'R'":       Switch xray on/off
-- 'Shift-R': Reload configuration (edit the configuration
-             file on-the-fly and add new regular expressions
-             or change the default background color)
+- F3:       Toggle xray
+- Ctrl-R:   Reload configuration (edit the configuration
+            file on-the-fly and add new regular expressions
+            or change the default background color)
