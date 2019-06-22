@@ -36,21 +36,22 @@ auto_enable=0
 # check out https://regex101.com/r
 
 [group_01]
-expr_01=^while
-expr_02=^for
+expr_01=^while\(
+expr_02=^for\(
 bgcolor=4c0037
 hint=loop
 
 [group_02]
-expr_01=recv
-expr_02=malloc
-expr_03=realloc
-expr_04=free
-expr_05=memcpy
-expr_06=memmove
-expr_07=strcpy
-expr_08=sscanf
-expr_09=sprintf
+expr_01=recv\(
+expr_02=malloc\(
+expr_03=realloc\(
+expr_04=free\(
+expr_05=memcpy\(
+expr_06=memmove\(
+expr_07=strcpy\(
+expr_08=sscanf\(
+expr_09=sprintf\(
+expr_10=recvfrom\(
 bgcolor=00374c
 hint=function name
 
@@ -61,8 +62,12 @@ bgcolor=4c1500
 hint=format strings
 
 [group_04]
-expr_01=malloc\(.*[\*\+\-\/%%].*\)
-expr_02=realloc\(.*,.*[\*\+\-\/%%].*\)
+expr_01=malloc\(.*[\*\+\-\/%%][^>].*\)
+expr_02=realloc\(([^,]+,){1}.*[\*\+\-\/%%][^>,].*\)
+expr_03=memcpy\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)
+expr_04=memmove\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)
+expr_05=recv\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)
+expr_06=recvfrom\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)
 bgcolor=4c1500
 hint=arithmetic"""
 
@@ -158,7 +163,7 @@ def swapcol(x):
             ((x & 0x00FF0000) >> 16))
 
 # -----------------------------------------------------------------------------
-def load_cfg():
+def load_cfg(reload=False):
     """loads xray configuration from file. Creates and loads default config
     if none is present."""
     global PATTERN_LIST
@@ -166,7 +171,9 @@ def load_cfg():
     global DO_FILTER
 
     cfg_file = get_cfg_filename()
-    kw.msg("%s: loading %s...\n" % (PLUGIN_NAME, cfg_file))
+    kw.msg("%s: %sloading %s...\n" % (PLUGIN_NAME,
+        "re" if reload else "",
+        cfg_file))
     if not os.path.isfile(cfg_file):
         kw.msg("%s: %s does not exist! creating default config... " % (PLUGIN_NAME, cfg_file))
         try:
@@ -176,7 +183,7 @@ def load_cfg():
         except:
             kw.msg("failed!\n")
             return False
-        return load_cfg()
+        return load_cfg(reload=True)
 
     PATTERN_LIST = []
 
@@ -204,10 +211,11 @@ def load_cfg():
                 HIGH_CONTRAST = config.getboolean(section, "high_contrast")
             except:
                 HIGH_CONTRAST = False
-            try:
-                DO_FILTER = config.getboolean(section, "auto_enable")
-            except:
-                DO_FILTER = False
+            if not reload:
+                try:
+                    DO_FILTER = config.getboolean(section, "auto_enable")
+                except:
+                    DO_FILTER = False
 
 
     if not len(PATTERN_LIST):
@@ -331,7 +339,7 @@ class loadcfg_action_handler_t(kw.action_handler_t):
         kw.action_handler_t.__init__(self)
 
     def activate(self, ctx):
-        if load_cfg():
+        if load_cfg(reload=True):
             vu = ida_hexrays.get_widget_vdui(ctx.widget)
             if vu:
                 vu.refresh_ctext()         

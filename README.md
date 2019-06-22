@@ -4,6 +4,9 @@ xray is a plugin for the Hexrays decompiler that colorizes
 the textual representation of the decompiler's output based on
 configurable regular expressions.
 
+This helps highlighting interesting code patterns which can be
+useful in malware analysis and vulnerability identification.
+
 ![xray animated gif](/rsrc/xray.gif?raw=true)
 
 ## Installation:
