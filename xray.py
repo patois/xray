@@ -8,25 +8,48 @@ import ida_diskio
 
 __author__ = "Dennis Elser"
 
-XRAY_FILTER_AID = "xray:filter"
-XRAY_LOADCFG_AID = "xray:loadcfg"
-PATTERN_LIST = []
-BGCOLOR = 0x000000
-DOFILTER = False
 PLUGIN_NAME = "xray"
+
+XRAY_FILTER_ACTION_ID = "%s:filter" % PLUGIN_NAME
+XRAY_LOADCFG_ACTION_ID = "%s:loadcfg" % PLUGIN_NAME
+
+PATTERN_LIST = []
+HIGH_CONTRAST = False
+
+DO_FILTER = False
+
 CFG_FILENAME = "%s.cfg" % PLUGIN_NAME
-DEFAULT_CFG = """[ui]
+DEFAULT_CFG = """# configuration file for xray.py
+
+[ui]
+# set to 1 for better contrast
+high_contrast=0
+
+# each group contains a list of regular
+# expressions and a background color in
+# RRGGBB format. priority is determined
+# by order of appearance, first group
+# gets assigned lowest priority.
+
+[group_01]
+expr_01=^while
+bgcolor=222222
+
+[group_02]
+expr_01=recv
+expr_02=malloc
+expr_03=realloc
+expr_04=free
+expr_05=memcpy
+expr_06=memmove
+expr_07=strcpy
+expr_08=strlen
+expr_09=sscanf
 bgcolor=030303
-[regex]
-r1=strcpy
-r2=malloc
-r3=realloc
-r4=free
-r5=recv
-r6=memcpy
-r7=memmove
-r8=sscanf.*,.*%s.*,
-r9=^while
+
+[group_03]
+expr_01=sscanf(.*,.*%%s.*,.*)
+bgcolor=440000
 """
 
 # -----------------------------------------------------------------------------
@@ -36,7 +59,7 @@ def is_plugin():
     return "__plugins__" in __name__
 
 # -----------------------------------------------------------------------------
-def get_target_filename():
+def get_dest_filename():
     """returns destination path for plugin installation."""
     return os.path.join(
         ida_diskio.get_user_idadir(),
@@ -46,11 +69,11 @@ def get_target_filename():
 # -----------------------------------------------------------------------------
 def is_installed():
     """checks whether script is present in designated plugins directory."""
-    return os.path.isfile(get_target_filename())
+    return os.path.isfile(get_dest_filename())
 
 # -----------------------------------------------------------------------------
 def get_cfg_filename():
-    """returns destination path."""
+    """returns full path for config file."""
     return os.path.join(
         ida_diskio.get_user_idadir(),
         "plugins",
@@ -82,7 +105,7 @@ def is_compatible():
 SELF = __file__
 def install_plugin():
     """Installs script to IDA userdir as a plugin."""
-    dst = get_target_filename()
+    dst = get_dest_filename()
     src = SELF
     if is_installed():
         btnid = kw.ask_yn(kw.ASKBTN_NO,
@@ -96,7 +119,7 @@ def install_plugin():
             return False
 
     usrdir = os.path.dirname(dst)
-    kw.msg("Copying script from \"%s\" to \"%s\" ..." % (src, usrdir))
+    kw.msg("%s: copying script from \"%s\" to \"%s\" ..." % (PLUGIN_NAME, src, usrdir))
     if not os.path.exists(usrdir):
         try:
             os.path.makedirs(usrdir)
@@ -122,17 +145,15 @@ def swapcol(x):
 
 # -----------------------------------------------------------------------------
 def load_cfg():
-    """loads xray configuration from file or creates default config
+    """loads xray configuration from file. Creates and loads default config
     if none is present."""
     global PATTERN_LIST
-    global BGCOLOR
+    global HIGH_CONTRAST
 
     cfg_file = get_cfg_filename()
-    kw.msg("%s: loading %s... " % (PLUGIN_NAME, cfg_file))
+    kw.msg("%s: loading %s...\n" % (PLUGIN_NAME, cfg_file))
     if not os.path.isfile(cfg_file):
-        kw.msg("failed!\n" 
-            "> file does not exist: %s\n"
-            "> creating default config... " % cfg_file)
+        kw.msg("%s: %s does not exist! creating default config... " % (PLUGIN_NAME, cfg_file))
         try:
             with open(cfg_file, "w") as f:
                 f.write(DEFAULT_CFG)
@@ -145,61 +166,76 @@ def load_cfg():
     PATTERN_LIST = []
 
     # TODO: error-handling
-    config = ConfigParser.ConfigParser()
+    config = ConfigParser.SafeConfigParser()
     config.read(cfg_file)
 
-    # read all regex expressions
-    for _, v in config.items("regex"):
-        PATTERN_LIST.append(v)
-
-    # read bg color
-    BGCOLOR = swapcol(int(config.get("ui", "bgcolor"), 16))
+    dbg_cfg = False
+    # read all sections
+    for section in config.sections():
+        expr_list = []
+        if section.startswith("group_"):
+            for k,v in config.items(section):
+                if k.startswith("expr_"):
+                    expr_list.append(v)
+            bgcolor = swapcol(int(config.get(section, "bgcolor"), 16))
+            PATTERN_LIST.append(RegexGroup(expr_list, bgcolor))
+        elif section == "ui":
+            HIGH_CONTRAST = config.getboolean(section, "high_contrast")
 
     if not len(PATTERN_LIST):
         kw.warning("Config file does not contain any regular expressions.")
-    kw.msg("success!\n")
     return True
 
 # -----------------------------------------------------------------------------
-def remove_color_tags(l):
-    """removes all color tags from a tagged simple_line_t object
-    but COLOR_ADDR tags."""
-    line = ""
-    i = 0
-    while i<len(l):
-        if l[i] is il.COLOR_ON:
-            n = il.tag_skipcode(l[i:])
-            if l[i:].find(chr(il.COLOR_ADDR)) == 1:
-                line += l[i:i+n]
-            i += n
-        elif l[i] in [il.COLOR_OFF, il.COLOR_ESC, il.COLOR_INV]:
-            n = il.tag_skipcode(l[i:])
-            i += n
-        else:
-            line += l[i]
-            i += 1
-    return line
+class RegexGroup():
+    """class that represents a config file's "group" section."""
+    def __init__(self, expr_list, bgcolor):
+        self.expr_list = expr_list
+        self.bgcolor = bgcolor
 
 # -----------------------------------------------------------------------------
 class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
     """class for handling decompiler events."""
-    def _search(self, pattern, sl):
+
+    def _remove_color_tags(self, l):
+        """removes all color tags from a tagged simple_line_t object
+        but preserves COLOR_ADDR tags."""
+        line = ""
+        i = 0
+        while i<len(l):
+            if l[i] is il.COLOR_ON:
+                n = il.tag_skipcode(l[i:])
+                if l[i:].find(chr(il.COLOR_ADDR)) == 1:
+                    line += l[i:i+n]
+                i += n
+            elif l[i] in [il.COLOR_OFF, il.COLOR_ESC, il.COLOR_INV]:
+                n = il.tag_skipcode(l[i:])
+                i += n
+            else:
+                line += l[i]
+                i += 1
+        return line
+
+    def _search(self, regexp, sl):
         line = il.tag_remove(sl.line).lstrip().rstrip()
-        return re.search(pattern, line) is not None
+        return re.search(regexp, line) is not None
 
     def _apply_xray_filter(self, cfunc):
-        if DOFILTER and cfunc:
+        if DO_FILTER and cfunc:
             pc = cfunc.get_pseudocode()
 
             #col = il.calc_bg_color(ida_idaapi.get_inf_structure().min_ea)
             #col = pc[0].bgcolor
-            col = BGCOLOR
             for sl in pc:
-                if any(self._search(pattern, sl) for pattern in PATTERN_LIST):
-                    #sl.bgcolor = (col & 0xfefefe) >> 1
-                    sl.bgcolor = col
-                else:
-                    sl.line = remove_color_tags(sl.line)
+                for group in PATTERN_LIST:
+                    for expr in group.expr_list:
+                        if self._search(expr, sl):
+                            #sl.bgcolor = (col & 0xfefefe) >> 1
+                            sl.bgcolor = group.bgcolor
+                            break
+                        if HIGH_CONTRAST:
+                            sl.line = self._remove_color_tags(sl.line)
+        return
 
     def _build_hint(self, vu):
         if vu.refresh_cpos(ida_hexrays.USE_MOUSE):
@@ -210,10 +246,11 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
             hint_lines.append(delim_s)
             hint = ""
             hint_created = False
-            for pattern in PATTERN_LIST:
-                if self._search(pattern, sl):
-                    hint_lines.append("> \"%s\"" % pattern)
-                    hint_created = True
+            for group in PATTERN_LIST:
+                for expr in group.expr_list:
+                    if self._search(expr, sl):
+                        hint_lines.append("> \"%s\"" % expr)
+                        hint_created = True
             hint_lines.append(delim_e)
             hint = "\n".join(hint_lines)
             if hint_created:
@@ -225,7 +262,8 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
         return 0
 
     def populating_popup(self, widget, phandle, vu):
-        kw.attach_action_to_popup(vu.ct, None, XRAY_FILTER_AID)
+        kw.attach_action_to_popup(vu.ct, None, XRAY_FILTER_ACTION_ID)
+        kw.attach_action_to_popup(vu.ct, None, XRAY_LOADCFG_ACTION_ID)
         return 0
 
     def create_hint(self, vu):
@@ -242,8 +280,8 @@ class xray_action_handler_t(kw.action_handler_t):
         kw.action_handler_t.__init__(self)
 
     def activate(self, ctx):
-        global DOFILTER
-        DOFILTER = not DOFILTER
+        global DO_FILTER
+        DO_FILTER = not DO_FILTER
         vu = ida_hexrays.get_widget_vdui(ctx.widget)
         if vu:
             vu.refresh_ctext()
@@ -288,14 +326,14 @@ class xray_plugin_t(ida_idaapi.plugin_t):
 
             kw.register_action(
                 kw.action_desc_t(
-                    XRAY_LOADCFG_AID,
+                    XRAY_LOADCFG_ACTION_ID,
                     "%s: reload config" % PLUGIN_NAME,
                     loadcfg_action_handler_t(),
-                    "Ctrl-r"))
+                    "Ctrl-R"))
 
             kw.register_action(
                 kw.action_desc_t(
-                    XRAY_FILTER_AID,
+                    XRAY_FILTER_ACTION_ID,
                     "%s: toggle" % PLUGIN_NAME,
                     xray_action_handler_t(),
                     "F3"))
@@ -312,8 +350,8 @@ class xray_plugin_t(ida_idaapi.plugin_t):
     def term(self):
         if self.xray_hooks:
             self.xray_hooks.unhook()
-            kw.unregister_action(XRAY_FILTER_AID)
-            kw.unregister_action(XRAY_LOADCFG_AID)
+            kw.unregister_action(XRAY_FILTER_ACTION_ID)
+            kw.unregister_action(XRAY_LOADCFG_ACTION_ID)
         return
 
 # -----------------------------------------------------------------------------
