@@ -19,7 +19,8 @@ HIGH_CONTRAST = False
 DO_FILTER = False
 
 CFG_FILENAME = "%s.cfg" % PLUGIN_NAME
-DEFAULT_CFG = """# configuration file for xray.py
+DEFAULT_CFG = """
+# configuration file for xray.py
 
 [ui]
 # set to 1 for better contrast
@@ -30,10 +31,13 @@ high_contrast=0
 # RRGGBB format. priority is determined
 # by order of appearance, first group
 # gets assigned lowest priority.
+# check out https://regex101.com/r
 
 [group_01]
 expr_01=^while
-bgcolor=222222
+expr_02=^for
+bgcolor=4c0037
+hint=loop
 
 [group_02]
 expr_01=recv
@@ -43,13 +47,22 @@ expr_04=free
 expr_05=memcpy
 expr_06=memmove
 expr_07=strcpy
-expr_08=strlen
-expr_09=sscanf
-bgcolor=030303
+expr_08=sscanf
+expr_09=sprintf
+bgcolor=00374c
+hint=function name
 
 [group_03]
-expr_01=sscanf(.*,.*%%s.*,.*)
-bgcolor=440000
+expr_01=sscanf\(.*,.*%%s.*,.*\)
+expr_02=sprintf\(.*,.*%%s.*,.*\)
+bgcolor=4c1500
+hint=format strings
+
+[group_04]
+expr_01=malloc\(.*[\*\+\-\/%%].*\)
+expr_02=realloc\(.*,.*[\*\+\-\/%%].*\)
+bgcolor=4c1500
+hint=arithmetic
 """
 
 # -----------------------------------------------------------------------------
@@ -165,11 +178,9 @@ def load_cfg():
 
     PATTERN_LIST = []
 
-    # TODO: error-handling
     config = ConfigParser.SafeConfigParser()
-    config.read(cfg_file)
+    config.readfp(open(cfg_file))
 
-    dbg_cfg = False
     # read all sections
     for section in config.sections():
         expr_list = []
@@ -177,8 +188,15 @@ def load_cfg():
             for k,v in config.items(section):
                 if k.startswith("expr_"):
                     expr_list.append(v)
-            bgcolor = swapcol(int(config.get(section, "bgcolor"), 16))
-            PATTERN_LIST.append(RegexGroup(expr_list, bgcolor))
+            try:
+                bgcolor = swapcol(int(config.get(section, "bgcolor"), 16))
+            except:
+                bgcolor = swapcol(0x000000)
+            try:
+                hint = config.get(section, "hint")
+            except:
+                hint = None
+            PATTERN_LIST.append(RegexGroup(expr_list, bgcolor, hint))
         elif section == "ui":
             HIGH_CONTRAST = config.getboolean(section, "high_contrast")
 
@@ -189,9 +207,10 @@ def load_cfg():
 # -----------------------------------------------------------------------------
 class RegexGroup():
     """class that represents a config file's "group" section."""
-    def __init__(self, expr_list, bgcolor):
+    def __init__(self, expr_list, bgcolor, hint):
         self.expr_list = expr_list
         self.bgcolor = bgcolor
+        self.hint = hint
 
 # -----------------------------------------------------------------------------
 class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
@@ -227,14 +246,16 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
             #col = il.calc_bg_color(ida_idaapi.get_inf_structure().min_ea)
             #col = pc[0].bgcolor
             for sl in pc:
+                match=False
                 for group in PATTERN_LIST:
                     for expr in group.expr_list:
                         if self._search(expr, sl):
                             #sl.bgcolor = (col & 0xfefefe) >> 1
                             sl.bgcolor = group.bgcolor
+                            match=True
                             break
-                        if HIGH_CONTRAST:
-                            sl.line = self._remove_color_tags(sl.line)
+                if not match and HIGH_CONTRAST:
+                    sl.line = self._remove_color_tags(sl.line)
         return
 
     def _build_hint(self, vu):
@@ -249,7 +270,8 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
             for group in PATTERN_LIST:
                 for expr in group.expr_list:
                     if self._search(expr, sl):
-                        hint_lines.append("> \"%s\"" % expr)
+                        tmp = (" (%s)" % group.hint) if group.hint else ""
+                        hint_lines.append("> \"%s\"%s" % (expr, tmp))
                         hint_created = True
             hint_lines.append(delim_e)
             hint = "\n".join(hint_lines)

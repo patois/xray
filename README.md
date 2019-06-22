@@ -20,7 +20,7 @@ IDA 7.2+ required.
 The plugin attempts to match regular expressions taken
 from its configuration file with each of the decompiler's
 text lines. Successful matches will cause the background
-color of a matching text line to be changed.
+color of a matching text line to be changed accordingly.
 
 Optionally, changing the "high_contrast" setting to "1" in the
 configuration file will cause a visual "xray" effect.
