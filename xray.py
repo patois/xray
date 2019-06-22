@@ -19,12 +19,14 @@ HIGH_CONTRAST = False
 DO_FILTER = False
 
 CFG_FILENAME = "%s.cfg" % PLUGIN_NAME
-DEFAULT_CFG = """
-# configuration file for xray.py
+DEFAULT_CFG = """# configuration file for xray.py
 
-[ui]
+[global]
 # set to 1 for better contrast
 high_contrast=0
+# changing this setting to 1 enables
+# xray by default 
+auto_enable=0
 
 # each group contains a list of regular
 # expressions and a background color in
@@ -62,8 +64,7 @@ hint=format strings
 expr_01=malloc\(.*[\*\+\-\/%%].*\)
 expr_02=realloc\(.*,.*[\*\+\-\/%%].*\)
 bgcolor=4c1500
-hint=arithmetic
-"""
+hint=arithmetic"""
 
 # -----------------------------------------------------------------------------
 def is_plugin():
@@ -162,6 +163,7 @@ def load_cfg():
     if none is present."""
     global PATTERN_LIST
     global HIGH_CONTRAST
+    global DO_FILTER
 
     cfg_file = get_cfg_filename()
     kw.msg("%s: loading %s...\n" % (PLUGIN_NAME, cfg_file))
@@ -197,8 +199,16 @@ def load_cfg():
             except:
                 hint = None
             PATTERN_LIST.append(RegexGroup(expr_list, bgcolor, hint))
-        elif section == "ui":
-            HIGH_CONTRAST = config.getboolean(section, "high_contrast")
+        elif section == "global":
+            try:
+                HIGH_CONTRAST = config.getboolean(section, "high_contrast")
+            except:
+                HIGH_CONTRAST = False
+            try:
+                DO_FILTER = config.getboolean(section, "auto_enable")
+            except:
+                DO_FILTER = False
+
 
     if not len(PATTERN_LIST):
         kw.warning("Config file does not contain any regular expressions.")
