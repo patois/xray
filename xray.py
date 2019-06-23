@@ -19,7 +19,7 @@ PATTERN_LIST = []
 HIGH_CONTRAST = False
 
 DO_FILTER = False
-SEARCH_QUERY = {}
+TEXT_INPUT_FORMS = {}
 
 CFG_FILENAME = "%s.cfg" % PLUGIN_NAME
 DEFAULT_CFG = """# configuration file for xray.py
@@ -32,10 +32,11 @@ high_contrast=0
 auto_enable=0
 
 # each group contains a list of regular
-# expressions and a background color in
-# RRGGBB format. priority is determined
-# by order of appearance, first group
-# gets assigned lowest priority.
+# expressions, a background color in
+# RRGGBB format and an optional hint field.
+# priority is determined by order of
+# appearance, first group gets assigned
+# lowest priority.
 # check out https://regex101.com/r
 
 [group_01]
@@ -212,7 +213,7 @@ def load_cfg(reload=False):
                 hint = config.get(section, "hint")
             except:
                 hint = None
-            PATTERN_LIST.append(RegexGroup(expr_list, bgcolor, hint))
+            PATTERN_LIST.append(ConfigGroupSection(expr_list, bgcolor, hint))
         elif section == "global":
             try:
                 HIGH_CONTRAST = config.getboolean(section, "high_contrast")
@@ -228,48 +229,99 @@ def load_cfg(reload=False):
         kw.warning("Config file does not contain any regular expressions.")
     return True
 
-class RegexInputForm(Form):
-    """Simple Form to test multilinetext and combo box controls"""
+# -----------------------------------------------------------------------------
+class TextInputForm(Form):
+    """Input form for regex search queries."""
+
+    # flags
+    SO_FIND_TEXT = 1
+    SO_FIND_REGEX = 2
+    SO_FILTER_TEXT = 4
+    SO_FILTER_COLOR = 8
+
     def __init__(self, parent_widget):
         self.parent_widget = parent_widget
         self.parent_title = kw.get_widget_title(self.parent_widget)
         i=1
         while kw.find_widget("%s-%d" % (PLUGIN_NAME, i)):
             i+=1
-        self.idx = i           
-        s = (SEARCH_QUERY[self.parent_title]
-            if self.parent_title in SEARCH_QUERY
-            else None)
-
+        self.idx = i
+        self.options = (TEXT_INPUT_FORMS[self.parent_title].options
+            if self.parent_title in TEXT_INPUT_FORMS.keys()
+            else TextInputForm.SO_FILTER_TEXT | TextInputForm.SO_FIND_TEXT)
+        self.query = (TEXT_INPUT_FORMS[self.parent_title].query
+            if self.parent_title in TEXT_INPUT_FORMS.keys()
+            else "")
         Form.__init__(self,
-r"""BUTTON YES NONE
-BUTTON NO NONE
-BUTTON CANCEL NONE
-%s-%d
-
-{FormChangeCb}
-<#Regex#:{cbEditable}>
-""" % (PLUGIN_NAME, self.idx),
+("BUTTON YES NONE\n"
+"BUTTON NO NONE\n"
+"BUTTON CANCEL NONE\n"
+"%s-%d\n\n"
+"{FormChangeCb}\n"
+"<##Enter text##Find:{cbEditable}>"
+"|<##Search options##Ascii:{rAscii}><Regex:{rRegex}>{cSearchOptions}>"
+"|<##Filter type##Text:{rText}><Color:{rColor}>{cFilterType}>\n"
+) % (PLUGIN_NAME, self.idx),
 {'FormChangeCb': Form.FormChangeCb(self.OnFormChange),
-'cbEditable': Form.StringInput(swidth=60, value = s)})
+'cbEditable': Form.StringInput(value = self.query),
+'cSearchOptions': Form.RadGroupControl(("rAscii", "rRegex")),
+'cFilterType': Form.RadGroupControl(("rText", "rColor")),
+})
 
+    def init_controls(self):
+        self.SetControlValue(self.cbEditable, self.query)
+        self.SetControlValue(self.cSearchOptions, 0 if self.options & TextInputForm.SO_FIND_TEXT else 1)
+        self.SetControlValue(self.cFilterType, 0 if self.options & TextInputForm.SO_FILTER_TEXT else 1)
+        return
+
+    def _commit_changes(self):
+        vu = ida_hexrays.get_widget_vdui(self.parent_widget)
+        if vu:
+            vu.refresh_ctext()
+            # "refresh_ctext()" took away the focus, take it back
+            kw.activate_widget(kw.find_widget(self.title), True)
+            self.SetFocusedField(self.cbEditable)
+            return True
+        return False
 
     def OnFormChange(self, fid):
-        global SEARCH_QUERY
-
         if fid == self.cbEditable.id:
-            s = self.GetControlValue(self.cbEditable)
-            SEARCH_QUERY[self.parent_title] = s
-            vu = ida_hexrays.get_widget_vdui(self.parent_widget)
-            if vu:
-                vu.refresh_ctext()
-                # refresh_ctext() stole our focus, get it back
-                kw.activate_widget(kw.find_widget(self.title), True)
-                self.SetFocusedField(self.cbEditable)
+            self.query = self.GetControlValue(self.cbEditable)
+            self._commit_changes()
+        elif fid in [self.rText.id, self.rColor.id]:
+            filter_text = fid == self.rText.id
+            filter_color = fid == self.rColor.id
+
+            if filter_text:
+                self.options |= TextInputForm.SO_FILTER_TEXT
+            else:
+                self.options &= ~TextInputForm.SO_FILTER_TEXT & 0xFFFFFFFF
+
+            if filter_color:
+                self.options |= TextInputForm.SO_FILTER_COLOR
+            else:
+                self.options &= ~TextInputForm.SO_FILTER_COLOR & 0xFFFFFFFF
+            self._commit_changes()
+
+        elif fid in [self.rAscii.id, self.rRegex.id]:
+            find_ascii = fid == self.rAscii.id
+            find_regex = fid == self.rRegex.id
+
+            if find_ascii:
+                self.options |= TextInputForm.SO_FIND_TEXT
+            else:
+                self.options &= ~TextInputForm.SO_FIND_TEXT & 0xFFFFFFFF
+
+            if find_regex:
+                self.options |= TextInputForm.SO_FIND_REGEX
+            else:
+                self.options &= ~TextInputForm.SO_FIND_REGEX & 0xFFFFFFFF
+            self._commit_changes()
+
         return 1
 
 # -----------------------------------------------------------------------------
-class RegexGroup():
+class ConfigGroupSection():
     """class that represents a config file's "group" section."""
     def __init__(self, expr_list, bgcolor, hint):
         self.expr_list = expr_list
@@ -305,8 +357,6 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
 
     def _apply_xray_filter(self, vu, pc):
         if DO_FILTER and pc:
-            #pc = cfunc.get_pseudocode()
-
             #col = il.calc_bg_color(ida_idaapi.get_inf_structure().min_ea)
             #col = pc[0].bgcolor
             for sl in pc:
@@ -325,27 +375,44 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
     def _apply_query_filter(self, vu, pc):
         new_pc = []
         title = kw.get_widget_title(vu.ct)
-        if title in SEARCH_QUERY.keys() and pc:
-            query = SEARCH_QUERY[title]
-            for sl in pc:
-                try:
-                    if self._search(query, sl):
+        if title in TEXT_INPUT_FORMS.keys() and pc:
+            sq = TEXT_INPUT_FORMS[title]
+            query = sq.query
+            options = sq.options
+
+            # TODO
+            if options & TextInputForm.SO_FIND_TEXT:
+                kw.set_highlight(vu.ct, query, kw.HIF_LOCKED)
+                for sl in pc:
+                    if query in sl.line:
                         new_pc.append(sl.line)
                     else:
-                        pass
-                except re.error as error:
-                    kw.msg("%s: %s: \"%s\"" %
-                        (PLUGIN_NAME, error, query))
-                    return
+                        if options & TextInputForm.SO_FILTER_COLOR:
+                            new_pc.append(self._remove_color_tags(sl.line))
+                        elif options & TextInputForm.SO_FILTER_TEXT:
+                            # do not add non-matching text
+                            pass
+            elif options & TextInputForm.SO_FIND_REGEX:
+                kw.set_highlight(vu.ct, None, 0)       
+                for sl in pc:
+                    try:
+                        if self._search(query, sl):
+                            new_pc.append(sl.line)
+                        else:
+                            if options & TextInputForm.SO_FILTER_COLOR:
+                                new_pc.append(self._remove_color_tags(sl.line))
+                            elif options & TextInputForm.SO_FILTER_TEXT:
+                                # do not add non-matching text
+                                pass
+                    except re.error as error:
+                        kw.msg("%s: %s: \"%s\"" %
+                            (PLUGIN_NAME, error, query))
+                        return
             pc.clear()
             sl = kw.simpleline_t()
             for line in new_pc:
                 sl.line = line
                 pc.push_back(sl)
-            # TODO
-            kw.set_highlight(vu.ct, query, kw.HIF_LOCKED)
-        else:
-            kw.set_highlight(vu.ct, None, 0)
         return
 
     def _build_hint(self, vu):
@@ -427,20 +494,32 @@ class loadcfg_action_handler_t(kw.action_handler_t):
 
 # -----------------------------------------------------------------------------
 class regexfilter_action_handler_t(kw.action_handler_t):
-    """action handler for reloading xray cfg file."""
+    """action handler for search queries."""
     def __init__(self):
         kw.action_handler_t.__init__(self)
 
     def _open_search_form(self, widget):
-        search_from = None
-        search_form = RegexInputForm(widget)
-        search_form.modal = False
-        search_form.openform_flags = kw.PluginForm.WOPN_DP_BOTTOM
-        search_form, _ = search_form.Compile()
-        search_form.Open()
+        global TEXT_INPUT_FORMS
+
+        title = kw.get_widget_title(widget)
+        if title not in TEXT_INPUT_FORMS.keys():
+            search_from = None
+            search_form = TextInputForm(widget)
+            search_form.modal = False
+            search_form.openform_flags = (kw.PluginForm.WOPN_DP_BOTTOM |
+                kw.PluginForm.WOPN_PERSIST)
+            search_form, _ = search_form.Compile()
+            search_form.Open()
+            TEXT_INPUT_FORMS[title] = search_form
+        else:
+            search_form = TEXT_INPUT_FORMS[title]
+            search_form.Open()
+            search_form.init_controls()
+        return
 
     def activate(self, ctx):
-        kw.warning("Caution: early/untested feature!")
+        kw.warning(("Caution: early/untested feature!\n"
+            "Sorry, no idea how the widget's size can be changed."))
         self._open_search_form(ctx.widget)
         return 1
 
