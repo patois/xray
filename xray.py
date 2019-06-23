@@ -6,17 +6,20 @@ import ida_kernwin as kw
 import ida_lines as il
 import ida_diskio
 
+from ida_kernwin import Form, Choose, ask_str
+
 __author__ = "Dennis Elser"
 
 PLUGIN_NAME = "xray"
 
 XRAY_FILTER_ACTION_ID = "%s:filter" % PLUGIN_NAME
 XRAY_LOADCFG_ACTION_ID = "%s:loadcfg" % PLUGIN_NAME
-
+XRAY_QUERY_ACTION_ID = "%s:query" % PLUGIN_NAME
 PATTERN_LIST = []
 HIGH_CONTRAST = False
 
 DO_FILTER = False
+SEARCH_QUERY = {}
 
 CFG_FILENAME = "%s.cfg" % PLUGIN_NAME
 DEFAULT_CFG = """# configuration file for xray.py
@@ -36,12 +39,16 @@ auto_enable=0
 # check out https://regex101.com/r
 
 [group_01]
+hint=loop
+bgcolor=4c0037
+
 expr_01=^while\(
 expr_02=^for\(
-bgcolor=4c0037
-hint=loop
 
 [group_02]
+hint=function name
+bgcolor=00374c
+
 expr_01=recv\(
 expr_02=malloc\(
 expr_03=realloc\(
@@ -52,24 +59,24 @@ expr_07=strcpy\(
 expr_08=sscanf\(
 expr_09=sprintf\(
 expr_10=recvfrom\(
-bgcolor=00374c
-hint=function name
 
 [group_03]
+hint=format strings
+bgcolor=4c1500
+
 expr_01=sscanf\(.*,.*%%s.*,.*\)
 expr_02=sprintf\(.*,.*%%s.*,.*\)
-bgcolor=4c1500
-hint=format strings
 
 [group_04]
+hint=arithmetic
+bgcolor=4c1500
+
 expr_01=malloc\(.*[\*\+\-\/%%][^>].*\)
 expr_02=realloc\(([^,]+,){1}.*[\*\+\-\/%%][^>,].*\)
 expr_03=memcpy\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)
 expr_04=memmove\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)
 expr_05=recv\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)
-expr_06=recvfrom\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)
-bgcolor=4c1500
-hint=arithmetic"""
+expr_06=recvfrom\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)"""
 
 # -----------------------------------------------------------------------------
 def is_plugin():
@@ -217,10 +224,49 @@ def load_cfg(reload=False):
                 except:
                     DO_FILTER = False
 
-
     if not len(PATTERN_LIST):
         kw.warning("Config file does not contain any regular expressions.")
     return True
+
+class RegexInputForm(Form):
+    """Simple Form to test multilinetext and combo box controls"""
+    def __init__(self, parent_widget):
+        self.parent_widget = parent_widget
+        self.parent_title = kw.get_widget_title(self.parent_widget)
+        i=1
+        while kw.find_widget("%s-%d" % (PLUGIN_NAME, i)):
+            i+=1
+        self.idx = i           
+        s = (SEARCH_QUERY[self.parent_title]
+            if self.parent_title in SEARCH_QUERY
+            else None)
+
+        Form.__init__(self,
+r"""BUTTON YES NONE
+BUTTON NO NONE
+BUTTON CANCEL NONE
+%s-%d
+
+{FormChangeCb}
+<#Regex#:{cbEditable}>
+""" % (PLUGIN_NAME, self.idx),
+{'FormChangeCb': Form.FormChangeCb(self.OnFormChange),
+'cbEditable': Form.StringInput(swidth=60, value = s)})
+
+
+    def OnFormChange(self, fid):
+        global SEARCH_QUERY
+
+        if fid == self.cbEditable.id:
+            s = self.GetControlValue(self.cbEditable)
+            SEARCH_QUERY[self.parent_title] = s
+            vu = ida_hexrays.get_widget_vdui(self.parent_widget)
+            if vu:
+                vu.refresh_ctext()
+                # refresh_ctext() stole our focus, get it back
+                kw.activate_widget(kw.find_widget(self.title), True)
+                self.SetFocusedField(self.cbEditable)
+        return 1
 
 # -----------------------------------------------------------------------------
 class RegexGroup():
@@ -257,9 +303,9 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
         line = il.tag_remove(sl.line).lstrip().rstrip()
         return re.search(regexp, line) is not None
 
-    def _apply_xray_filter(self, cfunc):
-        if DO_FILTER and cfunc:
-            pc = cfunc.get_pseudocode()
+    def _apply_xray_filter(self, vu, pc):
+        if DO_FILTER and pc:
+            #pc = cfunc.get_pseudocode()
 
             #col = il.calc_bg_color(ida_idaapi.get_inf_structure().min_ea)
             #col = pc[0].bgcolor
@@ -274,6 +320,32 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
                             break
                 if not match and HIGH_CONTRAST:
                     sl.line = self._remove_color_tags(sl.line)
+        return
+
+    def _apply_query_filter(self, vu, pc):
+        new_pc = []
+        title = kw.get_widget_title(vu.ct)
+        if title in SEARCH_QUERY.keys() and pc:
+            query = SEARCH_QUERY[title]
+            for sl in pc:
+                try:
+                    if self._search(query, sl):
+                        new_pc.append(sl.line)
+                    else:
+                        pass
+                except re.error as error:
+                    kw.msg("%s: %s: \"%s\"" %
+                        (PLUGIN_NAME, error, query))
+                    return
+            pc.clear()
+            sl = kw.simpleline_t()
+            for line in new_pc:
+                sl.line = line
+                pc.push_back(sl)
+            # TODO
+            kw.set_highlight(vu.ct, query, kw.HIF_LOCKED)
+        else:
+            kw.set_highlight(vu.ct, None, 0)
         return
 
     def _build_hint(self, vu):
@@ -298,12 +370,15 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
         return None
 
     def text_ready(self, vu):
-        self._apply_xray_filter(vu.cfunc)
+        pc = vu.cfunc.get_pseudocode()
+        self._apply_query_filter(vu, pc)
+        self._apply_xray_filter(vu, pc)
         return 0
 
     def populating_popup(self, widget, phandle, vu):
         kw.attach_action_to_popup(vu.ct, None, XRAY_FILTER_ACTION_ID)
         kw.attach_action_to_popup(vu.ct, None, XRAY_LOADCFG_ACTION_ID)
+        kw.attach_action_to_popup(vu.ct, None, XRAY_QUERY_ACTION_ID)
         return 0
 
     def create_hint(self, vu):
@@ -342,7 +417,31 @@ class loadcfg_action_handler_t(kw.action_handler_t):
         if load_cfg(reload=True):
             vu = ida_hexrays.get_widget_vdui(ctx.widget)
             if vu:
-                vu.refresh_ctext()         
+                vu.refresh_ctext()
+        return 1
+
+    def update(self, ctx):
+        return kw.AST_ENABLE_FOR_WIDGET if \
+            ctx.widget_type == kw.BWN_PSEUDOCODE else \
+            kw.AST_DISABLE_FOR_WIDGET
+
+# -----------------------------------------------------------------------------
+class regexfilter_action_handler_t(kw.action_handler_t):
+    """action handler for reloading xray cfg file."""
+    def __init__(self):
+        kw.action_handler_t.__init__(self)
+
+    def _open_search_form(self, widget):
+        search_from = None
+        search_form = RegexInputForm(widget)
+        search_form.modal = False
+        search_form.openform_flags = kw.PluginForm.WOPN_DP_BOTTOM
+        search_form, _ = search_form.Compile()
+        search_form.Open()
+
+    def activate(self, ctx):
+        kw.warning("Caution: early/untested feature!")
+        self._open_search_form(ctx.widget)
         return 1
 
     def update(self, ctx):
@@ -378,6 +477,13 @@ class xray_plugin_t(ida_idaapi.plugin_t):
                     xray_action_handler_t(),
                     "F3"))
 
+            kw.register_action(
+                kw.action_desc_t(
+                    XRAY_QUERY_ACTION_ID,
+                    "%s: search" % PLUGIN_NAME,
+                    regexfilter_action_handler_t(),
+                    "Ctrl-F"))
+
             self.xray_hooks = xray_hooks_t()
             self.xray_hooks.hook()
             return ida_idaapi.PLUGIN_KEEP
@@ -392,6 +498,7 @@ class xray_plugin_t(ida_idaapi.plugin_t):
             self.xray_hooks.unhook()
             kw.unregister_action(XRAY_FILTER_ACTION_ID)
             kw.unregister_action(XRAY_LOADCFG_ACTION_ID)
+            kw.unregister_action(XRAY_QUERY_ACTION_ID)
         return
 
 # -----------------------------------------------------------------------------
