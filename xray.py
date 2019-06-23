@@ -1,12 +1,12 @@
 import shutil, re, os, ConfigParser
+from PyQt5.QtWidgets import QWidget
+from PyQt5.QtCore import QRect
 
 import ida_hexrays
 import ida_idaapi
 import ida_kernwin as kw
 import ida_lines as il
 import ida_diskio
-
-from ida_kernwin import Form, Choose, ask_str
 
 __author__ = "Dennis Elser"
 
@@ -230,7 +230,7 @@ def load_cfg(reload=False):
     return True
 
 # -----------------------------------------------------------------------------
-class TextInputForm(Form):
+class TextInputForm(kw.Form):
     """Input form for regex search queries."""
 
     # flags
@@ -246,26 +246,27 @@ class TextInputForm(Form):
         while kw.find_widget("%s-%d" % (PLUGIN_NAME, i)):
             i+=1
         self.idx = i
+        __title = "%s-%s" % (PLUGIN_NAME, self.idx)
         self.options = (TEXT_INPUT_FORMS[self.parent_title].options
             if self.parent_title in TEXT_INPUT_FORMS.keys()
             else TextInputForm.SO_FILTER_TEXT | TextInputForm.SO_FIND_TEXT)
         self.query = (TEXT_INPUT_FORMS[self.parent_title].query
             if self.parent_title in TEXT_INPUT_FORMS.keys()
             else "")
-        Form.__init__(self,
+        kw.Form.__init__(self,
 ("BUTTON YES NONE\n"
 "BUTTON NO NONE\n"
 "BUTTON CANCEL NONE\n"
-"%s-%d\n\n"
+"%s\n\n"
 "{FormChangeCb}\n"
 "<##Enter text##Find:{cbEditable}>"
 "|<##Search options##Ascii:{rAscii}><Regex:{rRegex}>{cSearchOptions}>"
 "|<##Filter type##Text:{rText}><Color:{rColor}>{cFilterType}>\n"
-) % (PLUGIN_NAME, self.idx),
-{'FormChangeCb': Form.FormChangeCb(self.OnFormChange),
-'cbEditable': Form.StringInput(value = self.query),
-'cSearchOptions': Form.RadGroupControl(("rAscii", "rRegex")),
-'cFilterType': Form.RadGroupControl(("rText", "rColor")),
+) % (__title),
+{'FormChangeCb': kw.Form.FormChangeCb(self.OnFormChange),
+'cbEditable': kw.Form.StringInput(value = self.query),
+'cSearchOptions': kw.Form.RadGroupControl(("rAscii", "rRegex")),
+'cFilterType': kw.Form.RadGroupControl(("rText", "rColor")),
 })
 
     def init_controls(self):
@@ -384,7 +385,7 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
             if options & TextInputForm.SO_FIND_TEXT:
                 kw.set_highlight(vu.ct, query, kw.HIF_LOCKED)
                 for sl in pc:
-                    if query in sl.line:
+                    if query in il.tag_remove(sl.line).lstrip().rstrip():
                         new_pc.append(sl.line)
                     else:
                         if options & TextInputForm.SO_FILTER_COLOR:
@@ -498,12 +499,48 @@ class regexfilter_action_handler_t(kw.action_handler_t):
     def __init__(self):
         kw.action_handler_t.__init__(self)
 
+    # TODO
+    def _dirty_resize_hack(self, w, form):
+        title = form.title
+        widget = kw.find_widget(title)
+        if not widget:
+            return
+
+        w1 = kw.PluginForm.TWidgetToPyQtWidget(widget)
+        w2 = kw.PluginForm.TWidgetToPyQtWidget(w)
+        if not w1 or not w2:
+            return
+
+        p1 = w1.parentWidget()
+        p2 = w2.parentWidget()
+        if not p1 or not p2:
+            return
+
+        splitter = p1.parentWidget()
+        hr = p2.parentWidget()
+        if not splitter or not hr:
+            return
+
+        sizes = splitter.sizes()
+        if len(sizes) != 2:
+            return
+
+        idx = splitter.indexOf(p1)
+        _min, _max = splitter.getRange(idx)
+        sizes[idx] = _min
+
+        idx = splitter.indexOf(hr)
+        _min, _max = splitter.getRange(idx)
+        sizes[idx] = _max
+
+        splitter.setSizes(sizes)
+        return
+
     def _open_search_form(self, widget):
         global TEXT_INPUT_FORMS
 
         title = kw.get_widget_title(widget)
         if title not in TEXT_INPUT_FORMS.keys():
-            search_from = None
             search_form = TextInputForm(widget)
             search_form.modal = False
             search_form.openform_flags = (kw.PluginForm.WOPN_DP_BOTTOM |
@@ -511,15 +548,15 @@ class regexfilter_action_handler_t(kw.action_handler_t):
             search_form, _ = search_form.Compile()
             search_form.Open()
             TEXT_INPUT_FORMS[title] = search_form
+            self._dirty_resize_hack(widget, search_form)
         else:
             search_form = TEXT_INPUT_FORMS[title]
             search_form.Open()
             search_form.init_controls()
+            self._dirty_resize_hack(widget, search_form)
         return
 
     def activate(self, ctx):
-        kw.warning(("Caution: early/untested feature!\n"
-            "Sorry, no idea how the widget's size can be changed."))
         self._open_search_form(ctx.widget)
         return 1
 
