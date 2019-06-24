@@ -1,6 +1,5 @@
 import shutil, re, os, ConfigParser
-from PyQt5.QtWidgets import QWidget
-from PyQt5.QtCore import QRect
+from PyQt5.QtWidgets import QWidget, QSplitter
 
 import ida_hexrays
 import ida_idaapi
@@ -37,7 +36,8 @@ auto_enable=0
 # priority is determined by order of
 # appearance, first group gets assigned
 # lowest priority.
-# check out https://regex101.com/r
+# check out https://regex101.com/r and
+# https://www.debuggex.com/
 
 [group_01]
 hint=loop
@@ -65,19 +65,19 @@ expr_10=recvfrom\(
 hint=format strings
 bgcolor=4c1500
 
-expr_01=sscanf\(.*,.*%%s.*,.*\)
-expr_02=sprintf\(.*,.*%%s.*,.*\)
+expr_01=sscanf\(.*,.*%s.*,.*\)
+expr_02=sprintf\(.*,.*%s.*,.*\)
 
 [group_04]
 hint=arithmetic
 bgcolor=4c1500
 
-expr_01=malloc\(.*[\*\+\-\/%%][^>].*\)
-expr_02=realloc\(([^,]+,){1}.*[\*\+\-\/%%][^>,].*\)
-expr_03=memcpy\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)
-expr_04=memmove\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)
-expr_05=recv\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)
-expr_06=recvfrom\(([^,]+,){2}(.*[^,][\+\-\*\/%%][^>].*,)"""
+expr_01=malloc\(.*[\*\+\-\/%][^>].*?\)
+expr_02=realloc\(([^,]+,){1}(.*[^,][\+\-\*\/%][^>].*[^,])
+expr_03=memcpy\(([^,]+,){2}(.*[^,][\+\-\*\/%][^>].*[^,])
+expr_04=memmove\(([^,]+,){2}(.*[^,][\+\-\*\/%][^>].*[^,])
+expr_05=recv\(([^,]+,){2}(.*[^,][\+\-\*\/%][^>].*[^,])
+expr_06=recvfrom\(([^,]+,){2}(.*[^,][\+\-\*\/%][^>].*[^,])"""
 
 # -----------------------------------------------------------------------------
 def is_plugin():
@@ -195,7 +195,7 @@ def load_cfg(reload=False):
 
     PATTERN_LIST = []
 
-    config = ConfigParser.SafeConfigParser()
+    config = ConfigParser.RawConfigParser()
     config.readfp(open(cfg_file))
 
     # read all sections
@@ -259,9 +259,9 @@ class TextInputForm(kw.Form):
 "BUTTON CANCEL NONE\n"
 "%s\n\n"
 "{FormChangeCb}\n"
-"<##Enter text##Find:{cbEditable}>"
-"|<##Search options##Ascii:{rAscii}><Regex:{rRegex}>{cSearchOptions}>"
-"|<##Filter type##Text:{rText}><Color:{rColor}>{cFilterType}>\n"
+"<##Enter text##Filter:{cbEditable}>"
+"|<##Filter type##ASCII:{rAscii}><Regex:{rRegex}>{cSearchOptions}>"
+"|<##Filter options##Text:{rText}><Color:{rColor}>{cFilterType}>\n"
 ) % (__title),
 {'FormChangeCb': kw.Form.FormChangeCb(self.OnFormChange),
 'cbEditable': kw.Form.StringInput(value = self.query),
@@ -273,6 +273,7 @@ class TextInputForm(kw.Form):
         self.SetControlValue(self.cbEditable, self.query)
         self.SetControlValue(self.cSearchOptions, 0 if self.options & TextInputForm.SO_FIND_TEXT else 1)
         self.SetControlValue(self.cFilterType, 0 if self.options & TextInputForm.SO_FILTER_TEXT else 1)
+        self.SetFocusedField(self.cbEditable)
         return
 
     def _commit_changes(self):
@@ -521,6 +522,9 @@ class regexfilter_action_handler_t(kw.action_handler_t):
         if not splitter or not hr:
             return
 
+        if not type(splitter) == QSplitter or not type(hr) == QWidget:
+            return
+
         sizes = splitter.sizes()
         if len(sizes) != 2:
             return
@@ -576,35 +580,36 @@ class xray_plugin_t(ida_idaapi.plugin_t):
 
     def init(self):
         self.xray_hooks = None
-        if is_compatible():
-            load_cfg()
+        if not is_compatible():
+            kw.msg("%s: decompiler not available, skipping." % PLUGIN_NAME)
+            return ida_idaapi.PLUGIN_SKIP
 
-            kw.register_action(
-                kw.action_desc_t(
-                    XRAY_LOADCFG_ACTION_ID,
-                    "%s: reload config" % PLUGIN_NAME,
-                    loadcfg_action_handler_t(),
-                    "Ctrl-R"))
+        load_cfg()
 
-            kw.register_action(
-                kw.action_desc_t(
-                    XRAY_FILTER_ACTION_ID,
-                    "%s: toggle" % PLUGIN_NAME,
-                    xray_action_handler_t(),
-                    "F3"))
+        kw.register_action(
+            kw.action_desc_t(
+                XRAY_LOADCFG_ACTION_ID,
+                "%s: reload config" % PLUGIN_NAME,
+                loadcfg_action_handler_t(),
+                "Ctrl-R"))
 
-            kw.register_action(
-                kw.action_desc_t(
-                    XRAY_QUERY_ACTION_ID,
-                    "%s: search" % PLUGIN_NAME,
-                    regexfilter_action_handler_t(),
-                    "Ctrl-F"))
+        kw.register_action(
+            kw.action_desc_t(
+                XRAY_FILTER_ACTION_ID,
+                "%s: toggle" % PLUGIN_NAME,
+                xray_action_handler_t(),
+                "F3"))
 
-            self.xray_hooks = xray_hooks_t()
-            self.xray_hooks.hook()
-            return ida_idaapi.PLUGIN_KEEP
-        
-        return ida_idaapi.PLUGIN_SKIP
+        kw.register_action(
+            kw.action_desc_t(
+                XRAY_QUERY_ACTION_ID,
+                "%s: search" % PLUGIN_NAME,
+                regexfilter_action_handler_t(),
+                "Ctrl-F"))
+
+        self.xray_hooks = xray_hooks_t()
+        self.xray_hooks.hook()
+        return ida_idaapi.PLUGIN_KEEP
 
     def run(self, arg):
         return
