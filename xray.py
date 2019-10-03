@@ -238,6 +238,7 @@ class TextInputForm(kw.Form):
     SO_FIND_REGEX = 2
     SO_FILTER_TEXT = 4
     SO_FILTER_COLOR = 8
+    SO_FIND_CASE = 16
 
     def __init__(self, parent_widget):
         self.parent_widget = parent_widget
@@ -260,19 +261,20 @@ class TextInputForm(kw.Form):
 "%s\n\n"
 "{FormChangeCb}\n"
 "<##Enter text##Filter:{cbEditable}>"
-"|<##Filter type##ASCII:{rAscii}><Regex:{rRegex}>{cSearchOptions}>"
-"|<##Filter options##Text:{rText}><Color:{rColor}>{cFilterType}>\n"
-) % (__title),
-{'FormChangeCb': kw.Form.FormChangeCb(self.OnFormChange),
-'cbEditable': kw.Form.StringInput(value = self.query),
-'cSearchOptions': kw.Form.RadGroupControl(("rAscii", "rRegex")),
-'cFilterType': kw.Form.RadGroupControl(("rText", "rColor")),
-})
+"|<##Search##Text:{rText}><Regex:{rRegex}>{cSearchMethod}>"
+"|<##Filter##Lines:{rFilterLines}><Colors:{rFilterColors}>{cFilterType}>"
+"|<##Options##Case sensitive:{rCase}>{cOptions}>\n") % (__title), {
+    'FormChangeCb': kw.Form.FormChangeCb(self.OnFormChange),
+    'cbEditable': kw.Form.StringInput(value = self.query),
+    'cSearchMethod': kw.Form.RadGroupControl(("rText", "rRegex")),
+    'cFilterType': kw.Form.RadGroupControl(("rFilterLines", "rFilterColors")),
+    'cOptions': kw.Form.ChkGroupControl(("rCase",))})
 
     def init_controls(self):
         self.SetControlValue(self.cbEditable, self.query)
-        self.SetControlValue(self.cSearchOptions, 0 if self.options & TextInputForm.SO_FIND_TEXT else 1)
+        self.SetControlValue(self.cSearchMethod, 0 if self.options & TextInputForm.SO_FIND_TEXT else 1)
         self.SetControlValue(self.cFilterType, 0 if self.options & TextInputForm.SO_FILTER_TEXT else 1)
+        self.SetControlValue(self.cOptions, 1 if self.options & TextInputForm.SO_FIND_CASE else 0)
         self.SetFocusedField(self.cbEditable)
         return
 
@@ -289,10 +291,14 @@ class TextInputForm(kw.Form):
     def OnFormChange(self, fid):
         if fid == self.cbEditable.id:
             self.query = self.GetControlValue(self.cbEditable)
-            self._commit_changes()
-        elif fid in [self.rText.id, self.rColor.id]:
-            filter_text = fid == self.rText.id
-            filter_color = fid == self.rColor.id
+        elif fid == self.rCase.id:
+            if self.GetControlValue(self.cOptions):
+                self.options |= TextInputForm.SO_FIND_CASE
+            else:
+                self.options &= ~TextInputForm.SO_FIND_CASE & 0xFFFFFFFF
+        elif fid in [self.rFilterLines.id, self.rFilterColors.id]:
+            filter_text = fid == self.rFilterLines.id
+            filter_color = fid == self.rFilterColors.id
 
             if filter_text:
                 self.options |= TextInputForm.SO_FILTER_TEXT
@@ -303,13 +309,11 @@ class TextInputForm(kw.Form):
                 self.options |= TextInputForm.SO_FILTER_COLOR
             else:
                 self.options &= ~TextInputForm.SO_FILTER_COLOR & 0xFFFFFFFF
-            self._commit_changes()
-
-        elif fid in [self.rAscii.id, self.rRegex.id]:
-            find_ascii = fid == self.rAscii.id
+        elif fid in [self.rText.id, self.rRegex.id]:
+            find_text = fid == self.rText.id
             find_regex = fid == self.rRegex.id
 
-            if find_ascii:
+            if find_text:
                 self.options |= TextInputForm.SO_FIND_TEXT
             else:
                 self.options &= ~TextInputForm.SO_FIND_TEXT & 0xFFFFFFFF
@@ -318,8 +322,8 @@ class TextInputForm(kw.Form):
                 self.options |= TextInputForm.SO_FIND_REGEX
             else:
                 self.options &= ~TextInputForm.SO_FIND_REGEX & 0xFFFFFFFF
-            self._commit_changes()
-
+        
+        self._commit_changes()
         return 1
 
 # -----------------------------------------------------------------------------
@@ -353,9 +357,9 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
                 i += 1
         return line
 
-    def _search(self, regexp, sl):
+    def _search(self, regexp, sl, case_sensitive = False):
         line = il.tag_remove(sl.line).lstrip().rstrip()
-        return re.search(regexp, line) is not None
+        return re.search(regexp, line, flags=re.I if not case_sensitive else 0) is not None
 
     def _apply_xray_filter(self, vu, pc):
         if DO_FILTER and pc:
@@ -381,13 +385,16 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
             sq = TEXT_INPUT_FORMS[title]
             query = sq.query
             options = sq.options
+            case_sensitive = options & TextInputForm.SO_FIND_CASE
 
             # TODO
             if options & TextInputForm.SO_FIND_TEXT:
                 kw.set_highlight(vu.ct, query, kw.HIF_LOCKED)
-                query_lower = query.lower()
+                tmpquery = query.lower() if not case_sensitive else query
                 for sl in pc:
-                    if query_lower in il.tag_remove(sl.line).lstrip().rstrip().lower():
+                    haystack = il.tag_remove(sl.line).lstrip().rstrip()
+                    haystack = haystack.lower() if not case_sensitive else haystack
+                    if tmpquery in haystack:
                         new_pc.append(sl.line)
                     else:
                         if options & TextInputForm.SO_FILTER_COLOR:
@@ -400,7 +407,7 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
                 kw.set_highlight(vu.ct, None, 0)
                 for sl in pc:
                     try:
-                        if self._search(query, sl):
+                        if self._search(query, sl, case_sensitive):
                             new_pc.append(sl.line)
                         else:
                             if options & TextInputForm.SO_FILTER_COLOR:
