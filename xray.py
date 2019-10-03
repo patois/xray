@@ -149,7 +149,7 @@ def install_plugin():
     kw.msg("%s: copying script from \"%s\" to \"%s\" ..." % (PLUGIN_NAME, src, usrdir))
     if not os.path.exists(usrdir):
         try:
-            os.path.makedirs(usrdir)
+            os.makedirs(usrdir)
         except OSError as e:
             if e.errno != errno.EEXIST:
                 kw.msg("failed (mkdir)!\n")
@@ -385,17 +385,19 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
             # TODO
             if options & TextInputForm.SO_FIND_TEXT:
                 kw.set_highlight(vu.ct, query, kw.HIF_LOCKED)
+                query_lower = query.lower()
                 for sl in pc:
-                    if query in il.tag_remove(sl.line).lstrip().rstrip():
+                    if query_lower in il.tag_remove(sl.line).lstrip().rstrip().lower():
                         new_pc.append(sl.line)
                     else:
                         if options & TextInputForm.SO_FILTER_COLOR:
+                            # add line but remove color
                             new_pc.append(self._remove_color_tags(sl.line))
                         elif options & TextInputForm.SO_FILTER_TEXT:
                             # do not add non-matching text
                             pass
             elif options & TextInputForm.SO_FIND_REGEX:
-                kw.set_highlight(vu.ct, None, 0)       
+                kw.set_highlight(vu.ct, None, 0)
                 for sl in pc:
                     try:
                         if self._search(query, sl):
@@ -522,7 +524,7 @@ class regexfilter_action_handler_t(kw.action_handler_t):
         if not splitter or not hr:
             return
 
-        if not type(splitter) == QSplitter or not type(hr) == QWidget:
+        if not type(splitter) is QSplitter or not type(hr) is QWidget:
             return
 
         sizes = splitter.sizes()
