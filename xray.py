@@ -389,7 +389,7 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
 
             # TODO
             if options & TextInputForm.SO_FIND_TEXT:
-                kw.set_highlight(vu.ct, query, kw.HIF_LOCKED)
+                kw.set_highlight(vu.ct, query, HL_FLAGS)
                 tmpquery = query.lower() if not case_sensitive else query
                 for sl in pc:
                     haystack = il.tag_remove(sl.line).lstrip().rstrip()
@@ -645,4 +645,5 @@ def SCRIPT_ENTRY():
     return
 
 # -----------------------------------------------------------------------------
+HL_FLAGS = kw.HIF_LOCKED | kw.HIF_NOCASE if is_ida_version("7.4") else kw.HIF_LOCKED
 SCRIPT_ENTRY()
