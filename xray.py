@@ -1,4 +1,4 @@
-import shutil, re, os, ConfigParser
+import shutil, re, os, configparser
 from PyQt5.QtWidgets import QWidget, QSplitter
 
 import ida_hexrays
@@ -26,9 +26,8 @@ DEFAULT_CFG = """# configuration file for xray.py
 [global]
 # set to 1 for better contrast
 high_contrast=0
-# changing this setting to 1 enables
-# xray by default 
-auto_enable=0
+# enable xray by default 
+auto_enable=1
 
 # each group contains a list of regular
 # expressions, a background color in
@@ -116,7 +115,7 @@ def is_ida_version(requested):
     if not count:
         return False
 
-    for i in xrange(count):
+    for i in range(count):
         if int(kv[i]) < int(rv[i]):
             return False
     return True
@@ -195,7 +194,7 @@ def load_cfg(reload=False):
 
     PATTERN_LIST = []
 
-    config = ConfigParser.RawConfigParser()
+    config = configparser.RawConfigParser()
     config.readfp(open(cfg_file))
 
     # read all sections
