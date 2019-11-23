@@ -25,6 +25,8 @@ file should be ported to the new format or deleted.
 
 xray requires IDA 7.2+ (with some effort it may be backported to 7.0).
 
+This IDAPython project is compatible with Python3. For compatibility with older versions of IDA, you may want to check out the Python2 branch of this project.
+
 ## Usage:
 The plugin offers two distinct filtering/highlighting features:
 * "xray", a persistent, configurable regular expression parser that
