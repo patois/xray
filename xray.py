@@ -1,4 +1,4 @@
-import shutil, re, os, configparser
+import shutil, re, os, configparser, errno
 from PyQt5.QtWidgets import QWidget, QSplitter
 
 import ida_hexrays
@@ -453,9 +453,9 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
         return 0
 
     def populating_popup(self, widget, phandle, vu):
-        kw.attach_action_to_popup(vu.ct, None, XRAY_FILTER_ACTION_ID)
-        kw.attach_action_to_popup(vu.ct, None, XRAY_LOADCFG_ACTION_ID)
-        kw.attach_action_to_popup(vu.ct, None, XRAY_QUERY_ACTION_ID)
+        kw.attach_action_to_popup(vu.ct, None, XRAY_FILTER_ACTION_ID, PLUGIN_NAME+"/")
+        kw.attach_action_to_popup(vu.ct, None, XRAY_LOADCFG_ACTION_ID, PLUGIN_NAME+"/")
+        kw.attach_action_to_popup(vu.ct, None, XRAY_QUERY_ACTION_ID, PLUGIN_NAME+"/")
         return 0
 
     def create_hint(self, vu):
