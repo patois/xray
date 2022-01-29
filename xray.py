@@ -6,6 +6,7 @@ import ida_idaapi
 import ida_kernwin as kw
 import ida_lines as il
 import ida_diskio
+from ida_pro import IDA_SDK_VERSION
 
 __author__ = "Dennis Elser"
 
@@ -17,7 +18,7 @@ XRAY_QUERY_ACTION_ID = "%s:query" % PLUGIN_NAME
 PATTERN_LIST = []
 HIGH_CONTRAST = False
 
-DO_FILTER = False
+IS_ACTIVATED = False
 TEXT_INPUT_FORMS = {}
 
 CFG_FILENAME = "%s.cfg" % PLUGIN_NAME
@@ -26,8 +27,8 @@ DEFAULT_CFG = """# configuration file for xray.py
 [global]
 # set to 1 for better contrast
 high_contrast=0
-# enable xray by default 
-auto_enable=1
+# enable/disable xray when loading a database 
+auto_enable=0
 
 # each group contains a list of regular
 # expressions, a background color in
@@ -105,26 +106,15 @@ def get_cfg_filename():
         "plugins",
         "%s" % CFG_FILENAME)
 
-# -----------------------------------------------------------------------------
-def is_ida_version(requested):
-    """Checks minimum required IDA version."""
-    rv = requested.split(".")
-    kv = kw.get_kernel_version().split(".")
-
-    count = min(len(rv), len(kv))
-    if not count:
-        return False
-
-    for i in range(count):
-        if int(kv[i]) < int(rv[i]):
-            return False
-    return True
+# -----------------------------------------------------------------------
+def is_ida_version(min_ver_required):
+    return IDA_SDK_VERSION >= min_ver_required
 
 # -----------------------------------------------------------------------------
 def is_compatible():
     """Checks whether script is compatible with current IDA and
     decompiler versions."""
-    min_ida_ver = "7.2"
+    min_ida_ver = 720
     return is_ida_version(min_ida_ver) and ida_hexrays.init_hexrays_plugin()
 
 # -----------------------------------------------------------------------------
@@ -175,7 +165,7 @@ def load_cfg(reload=False):
     if none is present."""
     global PATTERN_LIST
     global HIGH_CONTRAST
-    global DO_FILTER
+    global IS_ACTIVATED
 
     cfg_file = get_cfg_filename()
     kw.msg("%s: %sloading %s...\n" % (PLUGIN_NAME,
@@ -220,9 +210,9 @@ def load_cfg(reload=False):
                 HIGH_CONTRAST = False
             if not reload:
                 try:
-                    DO_FILTER = config.getboolean(section, "auto_enable")
+                    IS_ACTIVATED = config.getboolean(section, "auto_enable")
                 except:
-                    DO_FILTER = False
+                    IS_ACTIVATED = False
 
     if not len(PATTERN_LIST):
         kw.warning("Config file does not contain any regular expressions.")
@@ -361,7 +351,7 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
         return re.search(regexp, line, flags=re.I if not case_sensitive else 0) is not None
 
     def _apply_xray_filter(self, vu, pc):
-        if DO_FILTER and pc:
+        if IS_ACTIVATED and pc:
             #col = il.calc_bg_color(ida_idaapi.get_inf_structure().min_ea)
             #col = pc[0].bgcolor
             for sl in pc:
@@ -426,7 +416,7 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
         return
 
     def _build_hint(self, vu):
-        if vu.refresh_cpos(ida_hexrays.USE_MOUSE):
+        if IS_ACTIVATED and vu.refresh_cpos(ida_hexrays.USE_MOUSE):
             sl = vu.cfunc.get_pseudocode()[vu.cpos.lnnum]
             hint_lines = ["%s pattern(s):" % PLUGIN_NAME]
             delim_s = "%s" % "="*len(hint_lines[0])
@@ -472,11 +462,12 @@ class xray_action_handler_t(kw.action_handler_t):
         kw.action_handler_t.__init__(self)
 
     def activate(self, ctx):
-        global DO_FILTER
-        DO_FILTER = not DO_FILTER
+        global IS_ACTIVATED
+        IS_ACTIVATED = not IS_ACTIVATED
         vu = ida_hexrays.get_widget_vdui(ctx.widget)
         if vu:
             vu.refresh_ctext()
+        kw.msg("[%s] %sactivated.\n" % (PLUGIN_NAME, "" if IS_ACTIVATED else "de"))
         return 1
 
     def update(self, ctx):
@@ -617,6 +608,7 @@ class xray_plugin_t(ida_idaapi.plugin_t):
 
         self.xray_hooks = xray_hooks_t()
         self.xray_hooks.hook()
+        kw.msg("[%s] F3: toggle xray, Ctrl-F: filter, Ctrl-R: reload config." % PLUGIN_NAME)
         return ida_idaapi.PLUGIN_KEEP
 
     def run(self, arg):
@@ -644,5 +636,5 @@ def SCRIPT_ENTRY():
     return
 
 # -----------------------------------------------------------------------------
-HL_FLAGS = kw.HIF_LOCKED | kw.HIF_NOCASE if is_ida_version("7.4") else kw.HIF_LOCKED
+HL_FLAGS = kw.HIF_LOCKED | kw.HIF_NOCASE if is_ida_version(740) else kw.HIF_LOCKED
 SCRIPT_ENTRY()
