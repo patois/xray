@@ -65,7 +65,3 @@ The plugin offers two distinct filtering/highlighting features:
             "Color": removes colors from non-matching lines
 
 ![xray3 animated gif](/rsrc/xray3.gif?raw=true)
-
-## Contact:
-
-Twitter: https://twitter.com/pat0is
