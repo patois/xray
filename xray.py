@@ -107,7 +107,7 @@ def get_cfg_filename():
         "%s" % CFG_FILENAME)
 
 # -----------------------------------------------------------------------
-def is_ida_version(min_ver_required):
+def is_min_sdk_ver(min_ver_required):
     return IDA_SDK_VERSION >= min_ver_required
 
 # -----------------------------------------------------------------------------
@@ -115,7 +115,7 @@ def is_compatible():
     """Checks whether script is compatible with current IDA and
     decompiler versions."""
     min_ida_ver = 720
-    return is_ida_version(min_ida_ver) and ida_hexrays.init_hexrays_plugin()
+    return is_min_sdk_ver(min_ida_ver) and ida_hexrays.init_hexrays_plugin()
 
 # -----------------------------------------------------------------------------
 SELF = __file__
@@ -373,6 +373,9 @@ class xray_hooks_t(ida_hexrays.Hexrays_Hooks):
         if title in TEXT_INPUT_FORMS.keys() and pc:
             sq = TEXT_INPUT_FORMS[title]
             query = sq.query
+            if not len(query):
+                kw.set_highlight(vu.ct, None, HL_FLAGS)
+                return
             options = sq.options
             case_sensitive = options & TextInputForm.SO_FIND_CASE
 
@@ -636,5 +639,11 @@ def SCRIPT_ENTRY():
     return
 
 # -----------------------------------------------------------------------------
-HL_FLAGS = kw.HIF_LOCKED | kw.HIF_NOCASE if is_ida_version(740) else kw.HIF_LOCKED
+
+HL_FLAGS = kw.HIF_LOCKED
+if is_min_sdk_ver(740):
+    HL_FLAGS |= kw.HIF_NOCASE
+if is_min_sdk_ver(770):
+    HL_FLAGS |= kw.HIF_USE_SLOT
+
 SCRIPT_ENTRY()
